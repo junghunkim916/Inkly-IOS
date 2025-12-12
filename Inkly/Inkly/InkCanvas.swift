@@ -5,8 +5,7 @@ import PencilKit
 // 1) 그리드 스타일 파라미터
 // ==========================
 struct GridStyle {
-    var inset: CGFloat = 20        // 전체 여백
-    var rowSpacing: CGFloat = 15   // 두 직사각형 사이 간격
+    var layout = GridLayoutSpec()
     
     var minorWidth: CGFloat = 4.0
     var majorWidth: CGFloat = 4.0
@@ -25,39 +24,37 @@ private extension CGContext {
     func drawGrid(in rect: CGRect, style: GridStyle) {
         let W = rect.width
         let H = rect.height
-        
-        // 전체 그리드가 차지할 높이 (캔버스 높이의 약 절반)
-        let totalGridHeight = H * 0.3
-        
-        // 각 행의 높이 (두 행이 동일한 높이)
-        let rowHeight = (totalGridHeight - style.rowSpacing) / 2
-        
-        // 시작 Y 위치 (상하 중앙 정렬)
+
+        let layout = style.layout
+
+        // ✅ 핵심 비율 계산
+        let totalGridHeight = H * layout.gridHeightRatio
+        let rowSpacing = totalGridHeight * layout.rowSpacingRatio
+        let rowHeight = (totalGridHeight - rowSpacing) / 2
+
+        let inset = W * layout.horizontalInsetRatio
+        let gridW = W - inset * 2
+
         let startY = (H - totalGridHeight) / 2
-        
-        // 가로 영역
-        let startX = style.inset
-        let gridW = W - style.inset * 2
-        
-        // ========== 첫 번째 행 (8칸) ==========
-        let firstRowY = startY
+        let startX = inset
+
+        // 1행 (8칸)
         drawRectangleRow(
             x: startX,
-            y: firstRowY,
+            y: startY,
             width: gridW,
             height: rowHeight,
-            cells: style.firstRowCells,
+            cells: layout.firstRowCells,
             style: style
         )
-        
-        // ========== 두 번째 행 (6칸) ==========
-        let secondRowY = firstRowY + rowHeight + style.rowSpacing
+
+        // 2행 (6칸)
         drawRectangleRow(
             x: startX,
-            y: secondRowY,
+            y: startY + rowHeight + rowSpacing,
             width: gridW,
             height: rowHeight,
-            cells: style.secondRowCells,
+            cells: layout.secondRowCells,
             style: style
         )
     }

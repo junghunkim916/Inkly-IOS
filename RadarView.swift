@@ -26,11 +26,19 @@ struct RadarView: View {
         return (total / Double(metrics.count)) * 100 // 0~1 값을 퍼센트로 변환
     }
 
+    // ✅ [NEW] 연습장으로 넘겨줄 이미지 경로 추출 헬퍼
+    private var currentRepPath: String {
+        if case let .analyze(_, path) = source {
+            return path ?? ""
+        }
+        return ""
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Text("현재 글씨와의 유사도").font(.title3).bold()
             
-            // ✨ 추가된 부분: 유사도 평균 표시
+            // 유사도 평균 표시
             Text("유사도 : \(averageSimilarity, specifier: "%.1f")%")
                 .font(.headline)
                 .foregroundColor(.blue)
@@ -51,22 +59,24 @@ struct RadarView: View {
             HStack {
                 Button("연습하러 가기") { pushPractice = true }
                     .buttonStyle(.borderedProminent)
-                    // 필요하다면 조건 완화 or 제거:
-                    .disabled( (jobIdForPractice?.isEmpty ?? true) ? false /*강제활성*/ : false )
-                    // ↑ 그냥 항상 활성화하려면 .disabled(false) 로 두세요.
+                    // 이미지 경로가 없거나 JobId가 없으면 비활성화
+                    .disabled((jobIdForPractice?.isEmpty ?? true) || currentRepPath.isEmpty)
 
                 Spacer()
 
                 Button("다시 분석") {
-                    Task { await load() }  // 원래 있던 분석 재호출
+                    Task { await load(forceNetwork: true) }
                 }
                 .buttonStyle(.bordered)
             }
             .padding(.horizontal)
 
-            // PracticeView로 이동
+            // ✅ [수정됨] PracticeView 생성 시 representativePath 전달
             NavigationLink("", isActive: $pushPractice) {
-                PracticeView(jobId: jobIdForPractice ?? "")
+                PracticeView(
+                    jobId: jobIdForPractice ?? "",
+                    representativePath: currentRepPath
+                )
             }
             .hidden()
         }
@@ -117,7 +127,7 @@ struct RadarView: View {
     }
 }
 
-
+// (RadarChart, RadarPolygon 구조체는 기존과 동일하므로 아래에 그대로 두거나 생략 가능)
 struct RadarChart: View {
     let labels: [String]
     let values: [Double] // 0.0 ~ 1.0
@@ -146,12 +156,12 @@ struct RadarChart: View {
                 }
             }
         }
-        .padding(Edge.Set.vertical, 8) // ← 위 1) 수정 적용
+        .padding(Edge.Set.vertical, 8)
     }
 }
 
 struct RadarPolygon: Shape {
-    let values: [Double] // 0...1
+    let values: [Double]
     func path(in rect: CGRect) -> Path {
         var p = Path()
         let n = max(values.count, 1)

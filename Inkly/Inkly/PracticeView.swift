@@ -1,121 +1,123 @@
 import SwiftUI
 import PencilKit
-import UIKit
 
 struct PracticeView: View {
     let jobId: String
+    let baseMetrics: [String: Double]
 
     @Environment(\.dismiss) private var dismiss
+
     @State private var canvas = PKCanvasView()
     @State private var bgImage: UIImage?
-    @State private var isLoadingBG = false
-    @State private var err: String?
+    @State private var rewriteMetrics: [String: Double] = [:]
+    @State private var pushRadar = false
     @State private var isWorking = false
-
-    // reanalyze 결과 임시 저장 → RadarView로 preset 전달
-    @State private var lastMetrics: [String: Double] = [:]
-    @State private var pushRadarAgain = false
+    @State private var errorMsg: String?
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("연습장").font(.title3).bold()
+            Text("연습장")
+                .font(.title3).bold()
 
+            // ✅ UploadView와 동일한 카드 크기
             ZStack {
                 if let img = bgImage {
                     Image(uiImage: img)
                         .resizable()
                         .scaledToFit()
+                        .frame(width: 450, height: 900)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .shadow(radius: 2)
-                } else {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.white)
-                        .overlay(
-                            VStack(spacing: 8) {
-                                if isLoadingBG { ProgressView("배경 불러오는 중…") }
-                                else { Text("배경 없음").foregroundColor(.gray) }
-                            }
-                        )
                 }
 
-                PracticeCanvas(canvas: $canvas)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                PracticeCanvasSized(
+                    canvas: $canvas,
+                    size: CGSize(width: 500, height: 1000)
+                )
             }
-            .frame(height: 320)
-            .padding(.horizontal)
 
             HStack {
-                Button("지우개") { canvas.tool = PKEraserTool(.vector) }
-                Button("펜") { canvas.tool = PKInkingTool(.pen, color: .black, width: 4) }
-                Button("모두 지우기") { canvas.drawing = PKDrawing() }
-                Spacer()
-            }
-            .padding(.horizontal)
-
-            HStack {
-                Button("재검사") { Task { await exportInkAndReanalyze() } }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isWorking)
+                Button("재검사") {
+                    Task { await reanalyze() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isWorking)
 
                 Spacer()
 
-                Button("종료하기") { dismiss() }
-                    .buttonStyle(.bordered)
+                Button("닫기") { dismiss() }
             }
-            .padding(.horizontal)
 
-            if let e = err { Text(e).font(.footnote).foregroundColor(.red) }
+            if let err = errorMsg {
+                Text(err).foregroundColor(.red)
+            }
 
-            // ✅ 방금 받은 지표 그대로 넘겨서 즉시 레이더 그리기
-            NavigationLink("", isActive: $pushRadarAgain) {
-                RadarView(source: .preset(lastMetrics))
+            NavigationLink("", isActive: $pushRadar) {
+                RadarView(
+                    source: .overlay(
+                        base: baseMetrics,
+                        rewrite: rewriteMetrics
+                    ),
+                    jobIdForPractice: jobId
+                )
             }
             .hidden()
         }
         .padding()
-        .task { await loadPracticeBackground() }
+        .task { await loadBackground() }
     }
 
-    private func loadPracticeBackground() async {
-        isLoadingBG = true; err = nil
-        defer { isLoadingBG = false }
+    private func loadBackground() async {
         do {
-            let data = try await APIClient.shared.practice()
-            guard let img = UIImage(data: data) else { err = "배경 이미지 디코딩 실패"; return }
-            bgImage = img
+            let data = try await APIClient.shared.practice(jobId: jobId)
+            bgImage = UIImage(data: data)
         } catch {
-            err = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorMsg = error.localizedDescription
         }
     }
 
-    // ✅ 핵심 수정: throw 밖에서 결과를 저장하고 push
-    private func exportInkAndReanalyze() async {
-        err = nil
-        guard let png = exportInkPNG() else { err = "잉크 추출 실패"; return }
+    private func reanalyze() async {
+        guard let png = canvas.drawing
+            .image(from: canvas.bounds, scale: UIScreen.main.scale)
+            .pngData()
+        else {
+            errorMsg = "연습 데이터를 PNG로 변환할 수 없습니다."
+            return
+        }
+
+        // 🔥🔥🔥 이 줄이 핵심
+        PracticeStore.shared.latestPNG = png
+
         isWorking = true
         defer { isWorking = false }
 
         do {
-            let res = try await APIClient.shared.reanalyze(practicePNG: png)
-            guard res.ok else {
-                throw APIError.serverMessage(res.error ?? "reanalyze failed")
-            }
-            let m = res.metrics ?? [:]          // ✅ 실제 값
-            await MainActor.run {
-                self.lastMetrics = m            // ✅ 값 저장
-                self.pushRadarAgain = true      // ✅ 즉시 이동
-            }
+            let res = try await APIClient.shared.reanalyze(
+                practicePNG: png,
+                jobId: jobId
+            )
+
+            rewriteMetrics = res.metrics ?? [:]
+            pushRadar = true
+
         } catch {
-            err = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorMsg = error.localizedDescription
         }
     }
+}
 
-    private func exportInkPNG() -> Data? {
-        let scale = UIScreen.main.scale
-        let bounds = canvas.bounds
-        canvas.isOpaque = false
+struct PracticeCanvasSized: UIViewRepresentable {
+    @Binding var canvas: PKCanvasView
+    let size: CGSize
+
+    func makeUIView(context: Context) -> PKCanvasView {
         canvas.backgroundColor = .clear
-        let inkOnly = canvas.drawing.image(from: bounds, scale: scale)
-        return inkOnly.pngData()
+        canvas.frame = CGRect(origin: .zero, size: size)
+        canvas.tool = PKInkingTool(.pen, color: .black, width: 4)
+        return canvas
+    }
+
+    func updateUIView(_ uiView: PKCanvasView, context: Context) {
+        uiView.frame = CGRect(origin: .zero, size: size)
     }
 }
+

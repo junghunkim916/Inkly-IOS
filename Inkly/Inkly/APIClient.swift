@@ -21,6 +21,7 @@ enum APIError: Error, LocalizedError {
 struct AnalyzeResponse: Decodable {
     let ok: Bool
     let metrics: [String: Double]?
+    let analyzeType: String?   // ⭐ 추가
     let error: String?
 }
 struct UploadResponse: Decodable {
@@ -47,6 +48,7 @@ struct ReanalyzeResponse: Decodable {
     let metrics: [String: Double]?
     let error: String?
     let practice: String?
+    let analyzeType: String?   // ⭐️ 추가
 }
 
 final class APIClient {
@@ -60,6 +62,7 @@ final class APIClient {
     }
     private let session: URLSession
 
+
     // MARK: - Request builder
     private func makeRequest(path: String, method: String = "GET", contentType: String? = nil) throws -> URLRequest {
         let url = AppConfig.baseURL.appendingPathComponent(path)
@@ -69,6 +72,10 @@ final class APIClient {
         req.setValue(AppConfig.apiKey, forHTTPHeaderField: "X-API-Key")
         if let ct = contentType { req.setValue(ct, forHTTPHeaderField: "Content-Type") }
         return req
+    }
+    
+    func url(path: String) -> URL {
+        AppConfig.baseURL.appendingPathComponent(path)
     }
 
     // MARK: - Centralized sender
@@ -207,44 +214,87 @@ final class APIClient {
         let (d, _) = try await send(req)
         return d
     }
+    func practice(jobId: String) async throws -> Data {
+        let base = AppConfig.baseURL.appendingPathComponent("practice")
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "jobId", value: jobId)
+        ]
+        guard let url = comps.url else {
+            throw APIError.invalidURL("practice url")
+        }
 
-    // MARK: 6️⃣ 연습 재검사 (/reanalyze)
-    func reanalyze(practicePNG data: Data, filename: String = "practice_ink.png") async throws -> ReanalyzeResponse {
-        let boundary = "Inkly-\(UUID().uuidString)"
-        var req = try makeRequest(path: "reanalyze",
-                                  method: "POST",
-                                  contentType: "multipart/form-data; boundary=\(boundary)")
-
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: image/png\r\n\r\n".data(using: .utf8)!)
-        body.append(data)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        req.httpBody = body
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(AppConfig.apiKey, forHTTPHeaderField: "X-API-Key")
 
         let (d, _) = try await send(req)
-        let decoded = try JSONDecoder().decode(ReanalyzeResponse.self, from: d)
+        return d
+    }
+
+    // MARK: 6️⃣ 연습 재검사 (/reanalyze)
+
+    func reanalyze(practicePNG: Data, jobId: String) async throws -> ReanalyzeResponse {
+        var req = URLRequest(url: AppConfig.baseURL.appendingPathComponent("reanalyze"))
+        req.httpMethod = "POST"
+
+        let boundary = "Inkly-\(UUID().uuidString)"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.setValue(AppConfig.apiKey, forHTTPHeaderField: "X-API-Key")   // ✅ 여기
+
+        var body = Data()
+
+        // ---- jobId ----
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"jobId\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(jobId)\r\n".data(using: .utf8)!)
+
+        // ---- file ----
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"practice.png\"\r\n"
+                .data(using: .utf8)!
+        )
+        body.append("Content-Type: image/png\r\n\r\n".data(using: .utf8)!)
+        body.append(practicePNG)
+        body.append("\r\n".data(using: .utf8)!)
+
+        // ---- end ----
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        req.httpBody = body
+
+        let (data, _) = try await session.data(for: req)
+        let decoded = try JSONDecoder().decode(ReanalyzeResponse.self, from: data)
+
         if decoded.ok == false {
             throw APIError.serverMessage(decoded.error ?? "reanalyze failed")
         }
         return decoded
     }
 }
-//extension APIClient {
-//
-//    // 예전에 downloadImage(path:) 쓰던 코드용
-//    func downloadImage(path: String) async throws -> Data {
-//        try await download(path: path)
-//    }
-//
-//    // 혹시 downloadImage(filename:) 형태로 부르는 곳이 있으면 이것도 커버
-//    func downloadImage(filename: String) async throws -> Data {
-//        try await download(path: filename)
-//    }
-//
-//    // 예전에 downloadFile(...) 쓰던 코드용
-//    func downloadFile(path: String) async throws -> Data {
-//        try await download(path: path)
-//    }
-//}
+extension APIClient {
+    func handwritingCharURL(jobId: String, index: Int) -> URL {
+        AppConfig.baseURL
+            .appendingPathComponent("download")
+            .appendingPathComponent("result\(jobId)")
+            .appendingPathComponent("handwriting")
+            .appendingPathComponent("\(index).png")
+    }
+
+    func generatedCharURL(jobId: String, index: Int) -> URL {
+        AppConfig.baseURL
+            .appendingPathComponent("download")
+            .appendingPathComponent("result\(jobId)")
+            .appendingPathComponent("generation")
+            .appendingPathComponent("\(index).png")
+    }
+}
+
+extension APIClient {
+    func imageURL(path: String) -> URL? {
+        AppConfig.baseURL.appendingPathComponent(path)
+    }
+}
+
+
